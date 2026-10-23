@@ -2,7 +2,13 @@ from http.client import HTTPException
 from urllib import response
 from pydantic import BaseModel
 from fastapi import FastAPI, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title = "TaskBoard")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5500"],
+)
 
 
 @app.get("/")
@@ -58,3 +64,5 @@ def delete_task(task_id: int):
     if task_id not in TASKS:
         raise HTTPException(status_code=404, detail="zadanie nie istnieje")
     del TASKS[task_id]
+
+
