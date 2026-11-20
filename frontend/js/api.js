@@ -1,13 +1,6 @@
 const API_URL = "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
-export class ApiError extends Error {
   constructor(status, message, errors = []) {
     super(message);
     this.status = status;

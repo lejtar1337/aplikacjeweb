@@ -10,9 +10,9 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 USERS: dict[int, dict] = {
-    1: {"id": 1, "name": "Kasia Nowak", "email": "kasia.nowak@example.com"},
+    1: {"id": 1, "name": "Anna Nowak", "email": "anna.nowak@example.com"},
     2: {"id": 2, "name": "Jan Kowalski", "email": "jan.kowalski@example.com"},
-    3: {"id": 3, "name": "Ewa Chodakowska", "email": "ewa.chodakowska@example.com"},
+    3: {"id": 3, "name": "Ewa Wiśniewska", "email": "ewa.wisniewska@example.com"},
 }
 
 PROJECTS: dict[int, dict] = {
@@ -30,6 +30,54 @@ TASKS: dict[int, dict] = {
 next_project_id = count(3)
 next_task_id = count(5)
 
+
+def not_blank(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("Wartość nie może składać się z samych białych znaków")
+    return value
+
+
+Title = Annotated[str, Field(min_length=1, max_length=200), AfterValidator(not_blank)]
+Name = Annotated[str, Field(min_length=1, max_length=100), AfterValidator(not_blank)]
+Description = Annotated[str, Field(max_length=500)]
+Status = Literal["open", "in_progress", "done"]
+Priority = Literal["low", "medium", "high"]
+
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+
+
+class ProjectCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Name
+    description: Description | None = None
+
+
+class ProjectUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Name | None = None
+    description: Description | None = None
+
+    @field_validator("name")
+    @classmethod
+    def reject_null(cls, value: str | None) -> str:
+        if value is None:
+            raise ValueError("Pole nie może mieć wartości null")
+        return value
+
+
+class ProjectOut(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    task_count: int
+
+
 class TaskCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -38,6 +86,7 @@ class TaskCreate(BaseModel):
     status: Status = "open"
     priority: Priority = "medium"
     assignee_id: int | None = None
+
 
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -69,24 +118,6 @@ class TaskPage(BaseModel):
     total: int
 
 
-class UserOut(BaseModel):
-    id: int
-    name: str
-
-
-class ProjectCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: Name
-    description: Description | None = None
-
-
-class ProjectOut(BaseModel):
-    id: int
-    name: str
-    description: str | None
-    task_count: int
-
 class FieldError(BaseModel):
     location: str
     field: str
@@ -101,7 +132,15 @@ class Problem(BaseModel):
     errors: list[FieldError] | None = None
 
 
-app = FastAPI(title="TaskBoard")
+app = FastAPI(
+    title="TaskBoard",
+    responses={
+        400: {"model": Problem},
+        404: {"model": Problem},
+        409: {"model": Problem},
+        422: {"model": Problem},
+    },
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,6 +148,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     expose_headers=["X-Total-Count"],
 )
+
 
 def problem(status: int, detail: str, errors: list[dict] | None = None, headers: dict | None = None) -> JSONResponse:
     body = Problem(title=HTTPStatus(status).phrase, status=status, detail=detail, errors=errors)
@@ -118,6 +158,7 @@ def problem(status: int, detail: str, errors: list[dict] | None = None, headers:
         headers=headers,
         media_type="application/problem+json",
     )
+
 
 @app.exception_handler(StarletteHTTPException)
 def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -139,22 +180,15 @@ def validation_exception_handler(request: Request, exc: RequestValidationError) 
     return problem(422, "Dane wejściowe nie spełniają kontraktu API", errors)
 
 
-def not_blank(value: str) -> str:
-    value = value.strip()
-    if not value:
-        raise ValueError("Wartość nie może składać się z samych białych znaków")
-    return value
-
-
-Title = Annotated[str, Field(min_length=1, max_length=200), AfterValidator(not_blank)]
-Name = Annotated[str, Field(min_length=1, max_length=100), AfterValidator(not_blank)]
-Description = Annotated[str, Field(max_length=500)]
-Status = Literal["open", "in_progress", "done"]
-Priority = Literal["low", "medium", "high"]
-
-
 def invalid_reference(field: str, message: str) -> RequestValidationError:
     return RequestValidationError([{"type": "invalid_reference", "loc": ("body", field), "msg": message}])
+
+
+def get_project_or_404(project_id: int) -> dict:
+    project = PROJECTS.get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Projekt {project_id} nie istnieje")
+    return project
 
 
 def get_task_or_404(task_id: int) -> dict:
@@ -164,29 +198,20 @@ def get_task_or_404(task_id: int) -> dict:
     return task
 
 
-def check_unique_title(project_id: int, title: str, task_id: int | None = None) -> None:
-    for task in TASKS.values():
-        if task["project_id"] == project_id and task["title"] == title and task["id"] != task_id:
-            raise HTTPException(status_code=409, detail="Zadanie o tym tytule już istnieje w projekcie")
-
-def find_by_title(title: str) -> dict | None:
-    for task in TASKS.values():
-        if task["title"] == title:
-            return task
-    return None
-
-def get_project_or_404(project_id: int) -> dict:
-    project = PROJECTS.get(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"Projekt {project_id} nie istnieje")
-    return project
-
-
 def project_out(project: dict) -> dict:
     task_count = sum(1 for task in TASKS.values() if task["project_id"] == project["id"])
     return {**project, "task_count": task_count}
 
 
+def check_assignee(assignee_id: int | None) -> None:
+    if assignee_id is not None and assignee_id not in USERS:
+        raise invalid_reference("assignee_id", f"Użytkownik {assignee_id} nie istnieje")
+
+
+def check_unique_title(project_id: int, title: str, task_id: int | None = None) -> None:
+    for task in TASKS.values():
+        if task["project_id"] == project_id and task["title"] == title and task["id"] != task_id:
+            raise HTTPException(status_code=409, detail="Zadanie o tym tytule już istnieje w projekcie")
 
 
 @app.get("/")
@@ -197,6 +222,7 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 
 @app.get("/users", response_model=list[UserOut])
 def list_users():
@@ -232,11 +258,32 @@ def get_project(project_id: int):
     return project_out(get_project_or_404(project_id))
 
 
+@app.patch("/projects/{project_id}", response_model=ProjectOut)
+def update_project(project_id: int, payload: ProjectUpdate):
+    project = get_project_or_404(project_id)
+    changes = payload.model_dump(exclude_unset=True)
+    if "name" in changes and any(
+        other["name"] == changes["name"] and other["id"] != project_id for other in PROJECTS.values()
+    ):
+        raise HTTPException(status_code=409, detail="Projekt o tej nazwie już istnieje")
+    project.update(changes)
+    return project_out(project)
+
+
+@app.delete("/projects/{project_id}", status_code=204)
+def delete_project(project_id: int):
+    project = get_project_or_404(project_id)
+    if project_out(project)["task_count"] > 0:
+        raise HTTPException(status_code=409, detail="Projekt zawiera zadania i nie może zostać usunięty")
+    del PROJECTS[project_id]
+
+
 @app.get("/tasks", response_model=TaskPage)
 def list_tasks(
     response: Response,
     status: Status | None = None,
     project_id: int | None = None,
+    assignee_id: int | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     items = list(TASKS.values())
@@ -244,6 +291,8 @@ def list_tasks(
         items = [task for task in items if task["status"] == status]
     if project_id is not None:
         items = [task for task in items if task["project_id"] == project_id]
+    if assignee_id is not None:
+        items = [task for task in items if task["assignee_id"] == assignee_id]
     response.headers["X-Total-Count"] = str(len(items))
     return {"items": items[:limit], "total": len(items)}
 
@@ -252,6 +301,7 @@ def list_tasks(
 def create_task(payload: TaskCreate, response: Response):
     if payload.project_id not in PROJECTS:
         raise invalid_reference("project_id", f"Projekt {payload.project_id} nie istnieje")
+    check_assignee(payload.assignee_id)
     check_unique_title(payload.project_id, payload.title)
     task_id = next(next_task_id)
     task = {"id": task_id, **payload.model_dump()}
@@ -265,16 +315,19 @@ def get_task(task_id: int):
     return get_task_or_404(task_id)
 
 
-@app.delete("/tasks/{task_id}", status_code=204)
-def delete_task(task_id: int):
-    get_task_or_404(task_id)
-    del TASKS[task_id]
-
 @app.patch("/tasks/{task_id}", response_model=TaskOut)
 def update_task(task_id: int, payload: TaskUpdate):
     task = get_task_or_404(task_id)
     changes = payload.model_dump(exclude_unset=True)
+    if "assignee_id" in changes:
+        check_assignee(changes["assignee_id"])
     if "title" in changes:
         check_unique_title(task["project_id"], changes["title"], task_id)
     task.update(changes)
     return task
+
+
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: int):
+    get_task_or_404(task_id)
+    del TASKS[task_id]
